@@ -199,6 +199,20 @@ private:
 };
 
 
+/**
+ mach_header、fat_header等在LLVM 下的 MachO.h 中定义
+ 
+ struct mach_header {
+   uint32_t magic;
+   uint32_t cputype;
+   uint32_t cpusubtype;
+   uint32_t filetype;
+   uint32_t ncmds;
+   uint32_t sizeofcmds;
+   uint32_t flags;
+ };
+ */
+
 // A mach-o file read/mapped into memory
 // Only info from mach_header or load commands is accessible (no LINKEDIT info)
 struct VIS_HIDDEN MachOFile : mach_header

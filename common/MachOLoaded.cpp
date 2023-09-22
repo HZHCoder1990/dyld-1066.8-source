@@ -380,6 +380,7 @@ bool MachOLoaded::findExportedSymbol(Diagnostics& diag, const char* symbolName, 
 
 intptr_t MachOLoaded::getSlide() const
 {
+    // 加载每个 Load Commands
     Diagnostics diag;
     __block intptr_t slide = 0;
     forEachLoadCommand(diag, ^(const load_command* cmd, bool& stop) {

@@ -539,9 +539,15 @@ bool MachOFile::isArch(const char* aName) const
     return (strcmp(aName, archName(this->cputype, this->cpusubtype)) == 0);
 }
 
+/// 获取具体的架构名称
+/// - Parameters:
+///   - cputype: CPU架构，包括 ARM64、X86_64、i386等
+///   - cpusubtype: 具体的CPU类型，区分不同版本的处理器
 const char* MachOFile::archName(uint32_t cputype, uint32_t cpusubtype)
 {
+    // 遍历 _s_archInfos 数组
     for (const ArchInfo& info : _s_archInfos) {
+        // CPU_SUBTYPE_MASK = 0xff000000, 32bits
         if ( (cputype == info.cputype) && ((cpusubtype & ~CPU_SUBTYPE_MASK) == info.cpusubtype) ) {
             return info.name;
         }
@@ -549,10 +555,21 @@ const char* MachOFile::archName(uint32_t cputype, uint32_t cpusubtype)
     return "unknown";
 }
 
+/// 是否是某种架构
+/// - Parameters:
+///   - archName: 架构名称
+///   - cputype: CPU信息地址
+///   - cpusubtype: 具体CPU架构信息地址
+/**
+ // From MacOSX system header "mach/machine.h"
+    typedef int cpu_type_t;
+    typedef int cpu_subtype_t;
+ */
 bool MachOFile::cpuTypeFromArchName(const char* archName, cpu_type_t* cputype, cpu_subtype_t* cpusubtype)
 {
    for (const ArchInfo& info : _s_archInfos) {
         if ( strcmp(archName, info.name) == 0 ) {
+            // 修改实参
             *cputype    = info.cputype;
             *cpusubtype = info.cpusubtype;
             return true;
@@ -561,6 +578,7 @@ bool MachOFile::cpuTypeFromArchName(const char* archName, cpu_type_t* cputype, c
     return false;
 }
 
+/// 当前 MachO 文件的架构信息
 const char* MachOFile::archName() const
 {
     return archName(this->cputype, this->cpusubtype);
@@ -578,7 +596,10 @@ static void appendDigit(char*& s, unsigned& num, unsigned place, bool& startedPr
         *s++ = '0';
     }
 }
-
+/*
+ 剔除字符串前面的字符，最多剔除前面5个字符
+ 如：appendNumber("huang", 2) => "ang"
+ */
 static void appendNumber(char*& s, unsigned num)
 {
     assert(num < 99999);
@@ -592,6 +613,7 @@ static void appendNumber(char*& s, unsigned num)
         *s++ = '0';
 }
 
+#warning TODO
 void MachOFile::packedVersionToString(uint32_t packedVersion, char versionString[32])
 {
     // sprintf(versionString, "%d.%d.%d", (packedVersion >> 16), ((packedVersion >> 8) & 0xFF), (packedVersion & 0xFF));
@@ -882,6 +904,9 @@ bool MachOFile::isPreload() const
     return (this->filetype == MH_PRELOAD);
 }
 
+
+/// 获取平台名称
+/// - Parameter reqPlatform: 平台
 const char* MachOFile::platformName(Platform reqPlatform)
 {
     for (const PlatformInfo& info : _s_platformInfos) {
@@ -893,9 +918,30 @@ const char* MachOFile::platformName(Platform reqPlatform)
 
 void MachOFile::forEachSupportedPlatform(void (^handler)(Platform platform, uint32_t minOS, uint32_t sdk)) const
 {
+    // 诊断类
     Diagnostics diag;
     __block bool foundPlatform = false;
     forEachLoadCommand(diag, ^(const load_command* cmd, bool& stop) {
+        /**
+         来自LLVM
+         struct build_version_command {
+           uint32_t cmd;      // LC_BUILD_VERSION
+           uint32_t cmdsize;  // sizeof(struct build_version_command) +
+                              // ntools * sizeof(struct build_tool_version)
+           uint32_t platform; // platform
+           uint32_t minos;    // X.Y.Z is encoded in nibbles xxxx.yy.zz
+           uint32_t sdk;      // X.Y.Z is encoded in nibbles xxxx.yy.zz
+           uint32_t ntools;   // number of tool entries following this
+         };
+         
+         struct version_min_command {
+           uint32_t cmd;     // LC_VERSION_MIN_MACOSX or
+                             // LC_VERSION_MIN_IPHONEOS
+           uint32_t cmdsize; // sizeof(struct version_min_command)
+           uint32_t version; // X.Y.Z is encoded in nibbles xxxx.yy.zz
+           uint32_t sdk;     // X.Y.Z is encoded in nibbles xxxx.yy.zz
+         };
+         */
         const build_version_command* buildCmd = (build_version_command *)cmd;
         const version_min_command*   versCmd  = (version_min_command*)cmd;
         uint32_t                     sdk;
@@ -1006,57 +1052,99 @@ bool MachOFile::hasMachOMagic() const
     return ( (this->magic == MH_MAGIC) || (this->magic == MH_MAGIC_64) );
 }
 
+
+/// 是否是大端模式
+/// LLVM中可以找到相关定义
+/*
+ MH_MAGIC = 0xFEEDFACE
+ MH_CIGAM = 0xCEFAEDFE
+ MH_MAGIC_64 = 0xFEEDFACF
+ MH_CIGAM_64 = 0xCFFAEDFE
+ FAT_MAGIC = 0xCAFEBABE
+ FAT_CIGAM = 0xBEBAFECA
+ */
 bool MachOFile::hasMachOBigEndianMagic() const
 {
     return ( (this->magic == MH_CIGAM) || (this->magic == MH_CIGAM_64) );
 }
 
 
+/// 回调每一条 command的首地址
+/// - Parameter diag: 诊断处理
 void MachOFile::forEachLoadCommand(Diagnostics& diag, void (^callback)(const load_command* cmd, bool& stop)) const
 {
+    // Default Value
     bool stop = false;
+    // load_command地址
     const load_command* startCmds = nullptr;
+    
+    // 计算load_command的起始地址
     if ( this->magic == MH_MAGIC_64 )
+        // 如果当前 MachO文件的 magic类型为MH_MAGIC_64
         startCmds = (load_command*)((char *)this + sizeof(mach_header_64));
     else if ( this->magic == MH_MAGIC )
+        // 如果当前 MachO文件的 magic类型为MH_MAGIC
         startCmds = (load_command*)((char *)this + sizeof(mach_header));
     else if ( hasMachOBigEndianMagic() )
+        // 如果是大端模式，直接返回
         return;  // can't process big endian mach-o
     else {
         const uint32_t* h = (uint32_t*)this;
         diag.error("file does not start with MH_MAGIC[_64]: 0x%08X 0x%08X", h[0], h [1]);
         return;  // not a mach-o file
     }
+    
+    // MH_EXECUTE = 0x00000002 LLVM中可以找到相关的 filetype
+    // filetype 标明 Mach-O 类型
     if ( this->filetype > 12 ) {
         diag.error("unknown mach-o filetype (%u)", this->filetype);
         return;
     }
+    
+    /**
+     struct load_command {
+       uint32_t cmd;
+       uint32_t cmdsize;
+     };
+     */
+    // command 结束地址
     const load_command* const cmdsEnd  = (load_command*)((char*)startCmds + this->sizeofcmds);
+    // sizeofcmds 这个在 mach_header里面，这里获取 cmdsLast 的作用是方便做一些前置校验
     const load_command* const cmdsLast = (load_command*)((char*)startCmds + this->sizeofcmds - sizeof(load_command));
+    // command 开始地址
     const load_command*       cmd      = startCmds;
+    // 遍历所有的 command
     for (uint32_t i = 0; i < this->ncmds; ++i) {
+        // 小于了开始的地址，肯定是异常的
         if ( cmd > cmdsLast ) {
             diag.error("malformed load command #%u of %u at %p with mh=%p, extends past sizeofcmds", i, this->ncmds, cmd, this);
             return;
         }
+        // command 的大小
         uint32_t cmdsize = cmd->cmdsize;
         if ( cmdsize < 8 ) {
             diag.error("malformed load command #%u of %u at %p with mh=%p, size (0x%X) too small", i, this->ncmds, cmd, this, cmd->cmdsize);
             return;
         }
+        // 不为4的倍数
         if ( (cmdsize % 4) != 0 ) {
             // FIXME: on 64-bit mach-o, should be 8-byte aligned, (might reveal bin-compat issues)
             diag.error("malformed load command #%u of %u at %p with mh=%p, size (0x%X) not multiple of 4", i, this->ncmds, cmd, this, cmd->cmdsize);
             return;
         }
+        // 下一条 command
         const load_command* nextCmd = (load_command*)((char *)cmd + cmdsize);
+        // 异常判断
         if ( (nextCmd > cmdsEnd) || (nextCmd < startCmds) ) {
             diag.error("malformed load command #%u of %u at %p with mh=%p, size (0x%X) is too large, load commands end at %p", i, this->ncmds, cmd, this, cmd->cmdsize, cmdsEnd);
             return;
         }
+        
+        // 把 command 回调出去
         callback(cmd, stop);
         if ( stop )
             return;
+        // 移动指针
         cmd = nextCmd;
     }
 }
